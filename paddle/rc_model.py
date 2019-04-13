@@ -16,9 +16,8 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import paddle.fluid.layers as layers
 import paddle.fluid as fluid
-import numpy as np
+import paddle.fluid.layers as layers
 
 
 def dropout(input, args):
@@ -84,7 +83,7 @@ def embedding(input_ids, shape, args):
         size=shape,
         dtype='float32',
         is_sparse=True,
-        param_attr=fluid.ParamAttr(name='embedding_para'))
+        param_attr=fluid.ParamAttr(name='embedding_para', trainable=args.train_embed))
     return input_embedding
 
 
@@ -103,19 +102,27 @@ def attn_flow(q_enc, p_enc, p_ids_name, args):
     tag = p_ids_name + "::"
     drnn = layers.DynamicRNN()
     with drnn.block():
+
+        # context to query attention
         h_cur = drnn.step_input(p_enc)
         u_all = drnn.static_input(q_enc)
         h_expd = layers.sequence_expand(x=h_cur, y=u_all)
+
         s_t_mul = layers.elementwise_mul(x=u_all, y=h_expd, axis=0)
         s_t_sum = layers.reduce_sum(input=s_t_mul, dim=1, keep_dim=True)
         s_t_re = layers.reshape(s_t_sum, shape=[-1, 0])
         s_t = layers.sequence_softmax(input=s_t_re)
+
         u_expr = layers.elementwise_mul(x=u_all, y=s_t, axis=0)
         u_expr = layers.sequence_pool(input=u_expr, pool_type='sum')
 
+        # query to context attention (b_t)
         b_t = layers.sequence_pool(input=s_t_sum, pool_type='max')
         drnn.output(u_expr, b_t)
+
     U_expr, b = drnn()
+
+    # b
     b_norm = layers.sequence_softmax(input=b)
     h_expr = layers.elementwise_mul(x=p_enc, y=b_norm, axis=0)
     h_expr = layers.sequence_pool(input=h_expr, pool_type='sum')
@@ -138,6 +145,7 @@ def fusion(g, args):
 
 def lstm_step(x_t, hidden_t_prev, cell_t_prev, size, para_name, args):
     """Util function for pointer network"""
+
     def linear(inputs, para_name, args):
         return layers.fc(input=inputs,
                          size=size,
@@ -156,7 +164,7 @@ def lstm_step(x_t, hidden_t_prev, cell_t_prev, size, para_name, args):
     cell_t = layers.sums(input=[
         layers.elementwise_mul(
             x=forget_gate, y=cell_t_prev), layers.elementwise_mul(
-                x=input_gate, y=cell_tilde)
+            x=input_gate, y=cell_tilde)
     ])
 
     hidden_t = layers.elementwise_mul(x=output_gate, y=layers.tanh(x=cell_t))
@@ -287,6 +295,8 @@ def rc_model(hidden_size, vocab, args):
     p_ids_name = 'p_ids'
 
     p_ids = get_data('p_ids', 2, args)
+    # 没有字符级别的embedding
+    # 单词级别的 embedding
     p_embs = embedding(p_ids, emb_shape, args)
     q_embs = embedding(q_ids, emb_shape, args)
     drnn = layers.DynamicRNN()
@@ -294,12 +304,16 @@ def rc_model(hidden_size, vocab, args):
         p_emb = drnn.step_input(p_embs)
         q_emb = drnn.step_input(q_embs)
 
-        p_enc = encoder(p_emb, 'p_enc', hidden_size, args)
-        q_enc = encoder(q_emb, 'q_enc', hidden_size, args)
+        # 句子级别的embedding
+        p_enc = encoder(p_emb, 'p_enc', hidden_size, args)  # paragraph
+        q_enc = encoder(q_emb, 'q_enc', hidden_size, args)  # query
 
+        # Attention flow layer is responsible for linking and
+        # fusing information from the context and the query words.
         # stage 2:match
         g_i = attn_flow(q_enc, p_enc, p_ids_name, args)
-        # stage 3:fusion
+
+        # stage 3:fusion 融合
         m_i = fusion(g_i, args)
         drnn.output(m_i, q_enc)
 

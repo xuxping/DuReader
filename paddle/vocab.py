@@ -18,6 +18,8 @@
 This module implements the Vocab class for converting string to id and back
 """
 
+import codecs
+
 import numpy as np
 
 
@@ -149,10 +151,12 @@ class Vocab(object):
             embedding_path: the path of the pretrained embedding file
         """
         trained_embeddings = {}
-        with open(embedding_path, 'r') as fin:
+        with codecs.open(embedding_path, 'r', 'utf-8') as fin:
             for line in fin:
                 contents = line.strip().split()
-                token = contents[0].decode('utf8')
+                if len(contents) <= 2:
+                    continue
+                token = contents[0]
                 if token not in self.token2id:
                     continue
                 trained_embeddings[token] = list(map(float, contents[1:]))

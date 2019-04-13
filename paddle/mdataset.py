@@ -18,13 +18,13 @@
 This module implements data process strategies.
 """
 
-import codecs
 import io
 import json
 import logging
+import random
 from collections import Counter
 
-import numpy as np
+from vocab import Vocab
 
 
 class BRCDataset(object):
@@ -44,29 +44,30 @@ class BRCDataset(object):
         self.max_p_len = max_p_len
         self.max_q_len = max_q_len
 
-        # self.train_files = train_files
-        # self.dev_files = dev_files
-        # self.test_files = test_files
+        self.train_files = train_files
+        self.dev_files = dev_files
+        self.test_files = test_files
 
         self.train_set, self.dev_set, self.test_set = [], [], []
+        self.vocab = None
         #
-        if train_files:
-            for train_file in train_files:
-                self.train_set += self._load_dataset(train_file, train=True)
-            self.logger.info('Train set size: {} questions.'.format(
-                len(self.train_set)))
-
-        if dev_files:
-            for dev_file in dev_files:
-                self.dev_set += self._load_dataset(dev_file)
-            self.logger.info('Dev set size: {} questions.'.format(
-                len(self.dev_set)))
-
-        if test_files:
-            for test_file in test_files:
-                self.test_set += self._load_dataset(test_file)
-            self.logger.info('Test set size: {} questions.'.format(
-                len(self.test_set)))
+        # if train_files:
+        #     for train_file in train_files:
+        #         self.train_set += self._load_dataset(train_file, train=True)
+        #     self.logger.info('Train set size: {} questions.'.format(
+        #         len(self.train_set)))
+        #
+        # if dev_files:
+        #     for dev_file in dev_files:
+        #         self.dev_set += self._load_dataset(dev_file)
+        #     self.logger.info('Dev set size: {} questions.'.format(
+        #         len(self.dev_set)))
+        #
+        # if test_files:
+        #     for test_file in test_files:
+        #         self.test_set += self._load_dataset(test_file)
+        #     self.logger.info('Test set size: {} questions.'.format(
+        #         len(self.test_set)))
 
     def path_reader(self, data_path, train=False):
         """
@@ -75,8 +76,8 @@ class BRCDataset(object):
             data_path: the data file to load
         Yields: a sample
         """
-        with codecs.open(data_path, 'r', 'utf8') as fin:
-            data_set = []
+        with io.open(data_path, 'r', encoding='utf-8') as fin:
+
             for lidx, line in enumerate(fin):
                 sample = json.loads(line.strip())
                 if train:
@@ -120,8 +121,7 @@ class BRCDataset(object):
                         sample['passages'].append({
                             'passage_tokens': fake_passage_tokens
                         })
-                data_set.append(sample)
-        return data_set
+                yield sample
 
     def _load_dataset(self, data_path, train=False):
         """
@@ -177,18 +177,20 @@ class BRCDataset(object):
                 data_set.append(sample)
         return data_set
 
-    def _one_mini_batch(self, data, indices, pad_id):
+    # def _one_mini_batch(self, data, indices, pad_id):
+    def _one_mini_batch(self, batch_list, shuffle=True):
         """
         Get one mini batch
         Args:
-            data: all data
+            batch_list: all data
             indices: the indices of the samples to be selected
             pad_id:
         Returns:
             one batch of data
         """
+
         batch_data = {
-            'raw_data': [data[i] for i in indices],
+            'raw_data': [],
             'question_token_ids': [],
             'question_length': [],
             'passage_token_ids': [],
@@ -197,6 +199,13 @@ class BRCDataset(object):
             'end_id': [],
             'passage_num': []
         }
+        if shuffle:
+            random.shuffle(batch_list)
+
+        for sample in batch_list:
+            self.convert_to_ids(sample)
+            batch_data['raw_data'].append(sample)
+
         max_passage_num = max(
             [len(sample['passages']) for sample in batch_data['raw_data']])
         max_passage_num = min(self.max_p_num, max_passage_num)
@@ -233,6 +242,7 @@ class BRCDataset(object):
                 # fake span for some samples, only valid for testing
                 batch_data['start_id'].append(0)
                 batch_data['end_id'].append(0)
+
         return batch_data
 
     def word_iter(self, set_name=None):
@@ -244,40 +254,57 @@ class BRCDataset(object):
             a generator
         """
         if set_name is None:
-            data_set = self.train_set + self.dev_set + self.test_set
+            # data_set = self.train_set + self.dev_set + self.test_set
+            data_path_set = self.train_files + self.dev_files + self.test_files
+            raise ValueError('invalid set_name')
         elif set_name == 'train':
-            data_set = self.train_set
+            # data_set = self.train_set
+            data_path_set = self.train_files
         elif set_name == 'dev':
-            data_set = self.dev_set
+            # data_set = self.dev_set
+            data_path_set = self.dev_files
         elif set_name == 'test':
-            data_set = self.test_set
+            data_path_set = self.test_files
+            # data_set = self.test_set
         else:
             raise NotImplementedError('No data set named as {}'.format(
                 set_name))
-
-        if data_set is not None:
-            for sample in data_set:
-                for token in sample['question_tokens']:
-                    yield token
-                for passage in sample['passages']:
-                    for token in passage['passage_tokens']:
+        is_train = True if set_name == 'train' else False
+        if data_path_set is not None:
+            for data_path in data_path_set:
+                for sample in self.path_reader(data_path, train=is_train):
+                    for token in sample['question_tokens']:
                         yield token
+                    for passage in sample['passages']:
+                        for token in passage['passage_tokens']:
+                            yield token
 
-    def convert_to_ids(self, vocab):
+        # if data_set is not None:
+        #     for sample in data_set:
+        #         for token in sample['question_tokens']:
+        #             yield token
+        #         for passage in sample['passages']:
+        #             for token in passage['passage_tokens']:
+        #                 yield token
+
+    def set_vocab(self, vocab):
+        if not isinstance(vocab, Vocab):
+            raise ValueError('is not instance of Vocab')
+
+        self.vocab = vocab
+
+    def convert_to_ids(self, sample):
         """
         Convert the question and passage in the original dataset to ids
         Args:
             vocab: the vocabulary on this dataset
         """
-        for data_set in [self.train_set, self.dev_set, self.test_set]:
-            if data_set is None:
-                continue
-            for sample in data_set:
-                sample['question_token_ids'] = vocab.convert_to_ids(sample[
-                                                                        'question_tokens'])
-                for passage in sample['passages']:
-                    passage['passage_token_ids'] = vocab.convert_to_ids(passage[
-                                                                            'passage_tokens'])
+
+        sample['question_token_ids'] = self.vocab.convert_to_ids(sample[
+                                                                     'question_tokens'])
+        for passage in sample['passages']:
+            passage['passage_token_ids'] = self.vocab.convert_to_ids(passage[
+                                                                         'passage_tokens'])
 
     def gen_mini_batches(self, set_name, batch_size, pad_id, shuffle=True):
         """
@@ -291,18 +318,29 @@ class BRCDataset(object):
             a generator for all batches
         """
         if set_name == 'train':
-            data = self.train_set
+            # data = self.train_set
+            path_set = self.train_files
         elif set_name == 'dev':
-            data = self.dev_set
+            # data = self.dev_set
+            path_set = self.dev_files
         elif set_name == 'test':
-            data = self.test_set
+            # data = self.test_set
+            path_set = self.test_files
         else:
             raise NotImplementedError('No data set named as {}'.format(
                 set_name))
-        data_size = len(data)
-        indices = np.arange(data_size)
-        if shuffle:
-            np.random.shuffle(indices)
-        for batch_start in np.arange(0, data_size, batch_size):
-            batch_indices = indices[batch_start:batch_start + batch_size]
-            yield self._one_mini_batch(data, batch_indices, pad_id)
+
+        is_train = True if set_name == 'train' else False
+        for data_path in path_set:
+            batch_list = []
+            for sample in self.path_reader(data_path, is_train):
+                batch_list.append(sample)
+                size = len(batch_list)
+                if size == batch_size:
+                    batch_data = self._one_mini_batch(batch_list, shuffle=True)
+                    yield batch_data
+                    batch_list = []
+
+            if len(batch_list) > 0:
+                batch_data = self._one_mini_batch(batch_list, shuffle=True)
+                yield batch_data

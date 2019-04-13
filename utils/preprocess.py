@@ -156,6 +156,7 @@ def find_fake_answer(sample):
         most_related_para_len = 999999
         max_related_score = 0
         for p_idx, para_tokens in enumerate(doc['segmented_paragraphs']):
+            # 通过计算共现词的词频来确定最相关的答案
             if len(sample['segmented_answers']) > 0:
                 related_score = metric_max_over_ground_truths(recall,
                                                               para_tokens,

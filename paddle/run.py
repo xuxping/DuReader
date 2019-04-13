@@ -16,21 +16,18 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import numpy as np
-import time
+import json
+import multiprocessing
 import os
 import random
-import json
-import six
-import multiprocessing
+import sys
 
-import paddle
+import numpy as np
 import paddle.fluid as fluid
 import paddle.fluid.core as core
-import paddle.fluid.framework as framework
+import six
 from paddle.fluid.executor import Executor
 
-import sys
 if sys.version[0] == '2':
     reload(sys)
     sys.setdefaultencoding("utf-8")
@@ -38,12 +35,13 @@ sys.path.append('..')
 
 from args import *
 import rc_model
-from dataset import BRCDataset
+from mdataset import BRCDataset
 import logging
 import pickle
 from utils import normalize
 from utils import compute_bleu_rouge
 from vocab import Vocab
+import time
 
 
 def prepare_batch_input(insts, args):
@@ -204,7 +202,7 @@ def find_best_answer_for_inst(sample, start_prob, end_prob, inst_lod,
         best_answer = ''
     else:
         best_answer = ''.join(sample['passages'][best_p_idx]['passage_tokens'][
-            best_span[0]:best_span[1] + 1])
+                              best_span[0]:best_span[1] + 1])
     return best_answer, best_span
 
 
@@ -231,7 +229,8 @@ def validation(inference_program, avg_cost, s_probs, e_probs, match, feed_order,
     ]
     val_feeder = fluid.DataFeeder(val_feed_list, place)
     pad_id = vocab.get_id(vocab.pad_token)
-    dev_reader = lambda:brc_data.gen_mini_batches('dev', args.batch_size, pad_id, shuffle=False)
+
+    dev_reader = lambda: brc_data.gen_mini_batches('dev', args.batch_size, pad_id, shuffle=False)
     dev_reader = read_multiple(dev_reader, dev_count)
 
     for batch_id, batch_list in enumerate(dev_reader(), 1):
@@ -249,28 +248,29 @@ def validation(inference_program, avg_cost, s_probs, e_probs, match, feed_order,
         n_batch_cnt += len(np.array(val_fetch_outs[0]))
         n_batch_loss += np.array(val_fetch_outs[0]).sum()
         log_every_n_batch = args.log_interval
+
         if log_every_n_batch > 0 and batch_id % log_every_n_batch == 0:
             logger.info('Average dev loss from batch {} to {} is {}'.format(
                 batch_id - log_every_n_batch + 1, batch_id, "%.10f" % (
-                    n_batch_loss / n_batch_cnt)))
+                        n_batch_loss / n_batch_cnt)))
             n_batch_loss = 0.0
             n_batch_cnt = 0
         batch_offset = 0
         for idx, batch in enumerate(batch_list):
-            #one batch
+            # one batch
             batch_size = len(batch['raw_data'])
             batch_range = match_lod[0][batch_offset:batch_offset + batch_size +
-                                       1]
+                                                    1]
             batch_lod = [[batch_range[x], batch_range[x + 1]]
                          for x in range(len(batch_range[:-1]))]
             start_prob_batch = start_probs_m[batch_offset:batch_offset +
-                                             batch_size + 1]
+                                                          batch_size + 1]
             end_prob_batch = end_probs_m[batch_offset:batch_offset + batch_size
-                                         + 1]
+                                                      + 1]
             for sample, start_prob_inst, end_prob_inst, inst_range in zip(
                     batch['raw_data'], start_prob_batch, end_prob_batch,
                     batch_lod):
-                #one instance
+                # one instance
                 inst_lod = match_lod[1][inst_range[0]:inst_range[1] + 1]
                 best_answer, best_span = find_best_answer_for_inst(
                     sample, start_prob_inst, end_prob_inst, inst_lod)
@@ -293,17 +293,19 @@ def validation(inference_program, avg_cost, s_probs, e_probs, match, feed_order,
                     ref_answers.append(ref)
             batch_offset = batch_offset + batch_size
 
-    result_dir = args.result_dir
-    result_prefix = args.result_name
-    if result_dir is not None and result_prefix is not None:
-        if not os.path.exists(args.result_dir):
-            os.makedirs(args.result_dir)
-        result_file = os.path.join(result_dir, result_prefix + '.json')
-        with open(result_file, 'w') as fout:
-            for pred_answer in pred_answers:
-                fout.write(json.dumps(pred_answer, ensure_ascii=False) + '\n')
-        logger.info('Saving {} results to {}'.format(result_prefix,
-                                                     result_file))
+    # save result in evaluate
+    if args.evaluate:
+        result_dir = args.result_dir
+        result_prefix = args.result_name
+        if result_dir is not None and result_prefix is not None:
+            if not os.path.exists(args.result_dir):
+                os.makedirs(args.result_dir)
+            result_file = os.path.join(result_dir, result_prefix + '.json')
+            with open(result_file, 'w') as fout:
+                for pred_answer in pred_answers:
+                    fout.write(json.dumps(pred_answer, ensure_ascii=False) + '\n')
+            logger.info('Saving {} results to {}'.format(result_prefix,
+                                                         result_file))
 
     ave_loss = 1.0 * total_loss / count
     # compute the bleu and rouge scores if reference answers is provided
@@ -342,7 +344,8 @@ def train(logger, args):
     brc_data = BRCDataset(args.max_p_num, args.max_p_len, args.max_q_len,
                           args.trainset, args.devset)
     logger.info('Converting text into ids...')
-    brc_data.convert_to_ids(vocab)
+    # brc_data.convert_to_ids(vocab)
+    brc_data.set_vocab(vocab)
     logger.info('Initialize the model...')
 
     if not args.use_gpu:
@@ -379,6 +382,7 @@ def train(logger, args):
                 logger.error('Unsupported optimizer: {}'.format(args.optim))
                 exit(-1)
             if args.weight_decay > 0.0:
+                # L2正则化
                 obj_func = avg_cost + args.weight_decay * l2_loss(main_program)
                 optimizer.minimize(obj_func)
             else:
@@ -386,12 +390,14 @@ def train(logger, args):
                 optimizer.minimize(obj_func)
 
             # initialize parameters
-            place = core.CUDAPlace(0) if args.use_gpu else core.CPUPlace()
+            # place = core.CUDAPlace(0) if args.use_gpu else core.CPUPlace()
             exe = Executor(place)
-            if args.load_dir:
-                logger.info('load from {}'.format(args.load_dir))
+            if args.start_epoch > 1:
+                load_dir = '{}/{}'.format(args.save_dir, args.start_epoch)
+                logger.info('load from {}'.format(load_dir))
                 fluid.io.load_persistables(
                     exe, args.load_dir, main_program=main_program)
+                args.start_epoch = args.start_epoch + 1
             else:
                 exe.run(startup_prog)
                 embedding_para = fluid.global_scope().find_var(
@@ -411,14 +417,14 @@ def train(logger, args):
                 use_cuda=bool(args.use_gpu),
                 loss_name=avg_cost.name)
             print_para(main_program, parallel_executor, logger, args)
-
-            for pass_id in range(1, args.pass_num + 1):
+            epochs = args.start_epoch + args.epochs
+            for pass_id in range(args.start_epoch, epochs):
                 pass_start_time = time.time()
                 pad_id = vocab.get_id(vocab.pad_token)
                 if args.enable_ce:
-                    train_reader = lambda:brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=False)
+                    train_reader = lambda: brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=False)
                 else:
-                    train_reader = lambda:brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=True)
+                    train_reader = lambda: brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=True)
                 train_reader = read_multiple(train_reader, dev_count)
                 log_every_n_batch, n_batch_loss = args.log_interval, 0
                 total_num, total_loss = 0, 0
@@ -452,12 +458,14 @@ def train(logger, args):
                             logger.info('Dev eval loss {}'.format(eval_loss))
                             logger.info('Dev eval result: {}'.format(
                                 bleu_rouge))
+
                 pass_end_time = time.time()
                 time_consumed = pass_end_time - pass_start_time
                 logger.info('epoch: {0}, epoch_time_cost: {1:.2f}'.format(
                     pass_id, time_consumed))
                 logger.info('Evaluating the model after epoch {}'.format(
                     pass_id))
+
                 if brc_data.dev_set is not None:
                     eval_loss, bleu_rouge = validation(
                         inference_program, avg_cost, s_probs, e_probs, match,
@@ -501,7 +509,8 @@ def evaluate(logger, args):
     brc_data = BRCDataset(
         args.max_p_num, args.max_p_len, args.max_q_len, dev_files=args.devset)
     logger.info('Converting text into ids...')
-    brc_data.convert_to_ids(vocab)
+    # brc_data.convert_to_ids(vocab)
+    brc_data.set_vocab(vocab)
     logger.info('Initialize the model...')
 
     # build model
@@ -549,8 +558,11 @@ def predict(logger, args):
     brc_data = BRCDataset(
         args.max_p_num, args.max_p_len, args.max_q_len, dev_files=args.testset)
     logger.info('Converting text into ids...')
-    brc_data.convert_to_ids(vocab)
+    brc_data.set_vocab(vocab)
     logger.info('Initialize the model...')
+
+    # covert dataset
+    args.devset = args.testset
 
     # build model
     main_program = fluid.Program()
@@ -582,6 +594,9 @@ def predict(logger, args):
                 inference_program, avg_cost, s_probs, e_probs, match,
                 feed_order, place, dev_count, vocab, brc_data, logger, args)
 
+            logger.info('test eval loss {}'.format(eval_loss))
+            logger.info('test eval result: {}'.format(bleu_rouge))
+
 
 def prepare(logger, args):
     """
@@ -604,19 +619,52 @@ def prepare(logger, args):
         vocab.add(word)
 
     unfiltered_vocab_size = vocab.size()
-    vocab.filter_tokens_by_cnt(min_cnt=2)
+    vocab.filter_tokens_by_cnt(min_cnt=3)
     filtered_num = unfiltered_vocab_size - vocab.size()
     logger.info('After filter {} tokens, the final vocab size is {}'.format(
         filtered_num, vocab.size()))
 
-    logger.info('Assigning embeddings...')
-    vocab.randomly_init_embeddings(args.embed_size)
+    logger.info('Assigning embeddings, embedding size: {}'.format(args.embed_size))
+
+    embedding_path = os.path.join(args.vocab_dir, 'vocab.wv.txt')
+    if os.path.exists(embedding_path):
+        vocab.load_pretrained_embeddings(embedding_path)
+        logger.info('Loading pretrain embedding from {}, embed size is {}'.format(embedding_path, vocab.embed_dim))
+
+    else:
+        vocab.randomly_init_embeddings(args.embed_size)
 
     logger.info('Saving vocab...')
     with open(os.path.join(args.vocab_dir, 'vocab.data'), 'wb') as fout:
         pickle.dump(vocab, fout)
 
     logger.info('Done with preparing!')
+
+
+def create_logger(args):
+    logger = logging.getLogger("brc")
+    logger.setLevel(logging.INFO)
+    formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    if args.log_path:
+        if args.prepare:
+            mode = 'prepare'
+        elif args.train:
+            mode = 'train'
+        else:
+            mode = 'evaluate'
+
+        log_file = '{}/log_{}_{}.txt'.format(args.log_path, mode, int(time.time()))
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(formatter)
+        logger.addHandler(file_handler)
+    else:
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        console_handler.setFormatter(formatter)
+        logger.addHandler(console_handler)
+    return logger
 
 
 if __name__ == '__main__':
@@ -626,20 +674,7 @@ if __name__ == '__main__':
         random.seed(args.random_seed)
         np.random.seed(args.random_seed)
 
-    logger = logging.getLogger("brc")
-    logger.setLevel(logging.INFO)
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    if args.log_path:
-        file_handler = logging.FileHandler(args.log_path)
-        file_handler.setLevel(logging.INFO)
-        file_handler.setFormatter(formatter)
-        logger.addHandler(file_handler)
-    else:
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
-        console_handler.setFormatter(formatter)
-        logger.addHandler(console_handler)
+    logger = create_logger(args)
     args = parse_args()
     logger.info('Running with args : {}'.format(args))
     if args.prepare:
