@@ -22,6 +22,8 @@ import distutils.util
 
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
+
+    # set run mode
     parser.add_argument(
         '--prepare',
         action='store_true',
@@ -32,6 +34,7 @@ def parse_args():
     parser.add_argument('--predict', action='store_true',
                         help='predict the answers for test set with trained model')
 
+    # set model hyper
     parser.add_argument("--embed_size", type=int, default=200,
                         help="The dimension of embedding table. (default: %(default)d)")
 
@@ -46,26 +49,27 @@ def parse_args():
     parser.add_argument('--optim', default='adam', help='optimizer type')
     parser.add_argument("--weight_decay", type=float, default=0.0001,
                         help="Weight decay. (default: %(default)f)")
-
     parser.add_argument('--drop_rate', type=float, default=0.1, help="Dropout probability")
     parser.add_argument('--random_seed', type=int, default=123)
     parser.add_argument("--batch_size", type=int, default=32,
                         help="The sequence number of a mini-batch data. (default: %(default)d)")
-    parser.add_argument("--start_epoch", type=int, default=1,
-                        help="resume from load_dir (default: %(default)d)")
-    parser.add_argument("--epochs", type=int, default=10,
-                        help="The number epochs to train. (default: %(default)d)")
-    parser.add_argument("--use_gpu", type=distutils.util.strtobool, default=True,
-                        help="Whether to use gpu. (default: %(default)d)")
-    parser.add_argument("--log_interval", type=int, default=50,
-                        help="log the train loss every n batches. (default: %(default)d)")
 
+    # set document
     parser.add_argument('--max_p_num', type=int, default=5)
     parser.add_argument('--max_a_len', type=int, default=200)
     parser.add_argument('--max_p_len', type=int, default=500)
     parser.add_argument('--max_q_len', type=int, default=60)
     parser.add_argument('--doc_num', type=int, default=5)
 
+    # set run epochs and gpu
+    parser.add_argument("--start_epoch", type=int, default=1,
+                        help="resume from load_dir (default: %(default)d)")
+    parser.add_argument("--epochs", type=int, default=10,
+                        help="The number epochs to train. (default: %(default)d)")
+    parser.add_argument("--use_gpu", type=distutils.util.strtobool, default=True,
+                        help="Whether to use gpu. (default: %(default)d)")
+
+    # set path
     parser.add_argument('--vocab_dir', default='../data/vocab', help='vocabulary')
     parser.add_argument("--save_dir", type=str, default="../data/models",
                         help="Specify the path to save trained models.")
@@ -80,6 +84,7 @@ def parse_args():
     parser.add_argument('--result_name', default='test_result',
                         help='the file name of the predicted results')
 
+    # set dataset
     parser.add_argument('--trainset', nargs='+',
                         default=['../data/preprocessed/trainset/search.train.json',
                                  '../data/preprocessed/trainset/zhidao.train.json'],
@@ -99,6 +104,8 @@ def parse_args():
     parser.add_argument('--para_print', action='store_true', help="Print debug info")
     parser.add_argument("--dev_interval", type=int, default=-1,
                         help="evaluate on dev set loss every n batches. (default: %(default)d)")
+    parser.add_argument("--log_interval", type=int, default=50,
+                        help="log the train loss every n batches. (default: %(default)d)")
     args = parser.parse_args()
 
     if args.demo:
