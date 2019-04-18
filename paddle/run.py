@@ -455,7 +455,6 @@ def train(logger, args):
                                 inference_program, avg_cost, s_probs, e_probs,
                                 match, feed_order, place, dev_count, vocab,
                                 brc_data, logger, args)
-                            logger.info('Dev eval loss {}'.format(eval_loss))
                             logger.info('Dev eval result: {}'.format(
                                 bleu_rouge))
 
@@ -471,7 +470,6 @@ def train(logger, args):
                         inference_program, avg_cost, s_probs, e_probs, match,
                         feed_order, place, dev_count, vocab, brc_data, logger,
                         args)
-                    logger.info('Dev eval loss {}'.format(eval_loss))
                     logger.info('Dev eval result: {}'.format(bleu_rouge))
                 else:
                     logger.warning(
@@ -542,7 +540,6 @@ def evaluate(logger, args):
             eval_loss, bleu_rouge = validation(
                 inference_program, avg_cost, s_probs, e_probs, match, feed_order,
                 place, dev_count, vocab, brc_data, logger, args)
-            logger.info('Dev eval loss {}'.format(eval_loss))
             logger.info('Dev eval result: {}'.format(bleu_rouge))
             logger.info('Predicted answers are saved to {}'.format(
                 os.path.join(args.result_dir)))
