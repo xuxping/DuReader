@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--embed_size", type=int, default=200,
                         help="The dimension of embedding table. (default: %(default)d)")
 
-    parser.add_argument("--hidden_size", type=int, default=150,
+    parser.add_argument("--hidden_size", type=int, default=100,
                         help="The dimension of embedding table. (default: %(default)d)")
 
     parser.add_argument("--train_embed", type=distutils.util.strtobool, default=True,
@@ -49,7 +49,7 @@ def parse_args():
     parser.add_argument('--optim', default='adam', help='optimizer type')
     parser.add_argument("--weight_decay", type=float, default=0.0001,
                         help="Weight decay. (default: %(default)f)")
-    parser.add_argument('--drop_rate', type=float, default=0.1, help="Dropout probability")
+    parser.add_argument('--drop_rate', type=float, default=0.0, help="Dropout probability")
     parser.add_argument('--random_seed', type=int, default=123)
     parser.add_argument("--batch_size", type=int, default=32,
                         help="The sequence number of a mini-batch data. (default: %(default)d)")
@@ -64,7 +64,7 @@ def parse_args():
     # set run epochs and gpu
     parser.add_argument("--start_epoch", type=int, default=1,
                         help="resume from load_dir (default: %(default)d)")
-    parser.add_argument("--epochs", type=int, default=10,
+    parser.add_argument("--epochs", type=int, default=1,
                         help="The number epochs to train. (default: %(default)d)")
     parser.add_argument("--use_gpu", type=distutils.util.strtobool, default=True,
                         help="Whether to use gpu. (default: %(default)d)")
@@ -86,20 +86,22 @@ def parse_args():
 
     # set dataset
     parser.add_argument('--trainset', nargs='+',
-                        default=['../data/preprocessed/trainset/search.train.json',
-                                 '../data/preprocessed/trainset/zhidao.train.json'],
+                        default=['../data/extracted/trainset/search.train.json',
+                                 '../data/extracted/trainset/zhidao.train.json'],
                         help='train dataset')
     parser.add_argument('--devset', nargs='+',
                         # default=[],
-                        default=['../data/preprocessed/devset/search.dev.json',
-                                 '../data/preprocessed/devset/zhidao.dev.json'],
+                        default=['../data/extracted/devset/search.dev.json',
+                                 '../data/extracted/devset/zhidao.dev.json'],
                         help='dev dataset')
     parser.add_argument('--testset', nargs='+',
                         default=['../data/preprocessed/test1set/search.test1.json',
                                  '../data/preprocessed/test1set/zhidao.test1.json'],
                         help='test dataset')
 
-    parser.add_argument("--enable_ce", action='store_true',
+    parser.add_argument("--save_result", action='store_true',
+                        help="If set, save dev/test result into result.json.")
+    parser.add_argument("--enable_ce", action='store_true', default=True,
                         help="If set, run the task with continuous evaluation logs.")
     parser.add_argument('--para_print', action='store_true', help="Print debug info")
     parser.add_argument("--dev_interval", type=int, default=-1,
