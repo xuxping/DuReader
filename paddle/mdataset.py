@@ -17,14 +17,42 @@
 """
 This module implements data process strategies.
 """
-
 import io
 import json
 import logging
+import mmap
 import random
 from collections import Counter
 
+import numpy as np
+
 from vocab import Vocab
+
+
+class MmapFile(object):
+    """
+    Use mmap to improve read speed
+    """
+    def __init__(self, datafile):
+        headerfile = datafile + '.header'
+        self.offsetdict = {}
+        for line in open(headerfile, 'r'):
+            key, val_pos, val_len = line.split('\t')
+            self.offsetdict[key] = (int(val_pos), int(val_len))
+
+        # self.fp = open(datafile, 'rb')
+        with open(datafile, 'rb') as fp:
+            self.m = mmap.mmap(fp.fileno(), 0, access=mmap.ACCESS_READ)
+
+    def getvalue(self, key):
+        p = self.offsetdict.get(key, None)
+        if p is None:
+            return None
+        val_pos, val_len = p
+        return self.m[val_pos:(val_pos + val_len)]
+
+    def getdictlen(self):
+        return len(self.offsetdict)
 
 
 class BRCDataset(object):
@@ -50,24 +78,6 @@ class BRCDataset(object):
 
         self.train_set, self.dev_set, self.test_set = [], [], []
         self.vocab = None
-        #
-        # if train_files:
-        #     for train_file in train_files:
-        #         self.train_set += self._load_dataset(train_file, train=True)
-        #     self.logger.info('Train set size: {} questions.'.format(
-        #         len(self.train_set)))
-        #
-        # if dev_files:
-        #     for dev_file in dev_files:
-        #         self.dev_set += self._load_dataset(dev_file)
-        #     self.logger.info('Dev set size: {} questions.'.format(
-        #         len(self.dev_set)))
-        #
-        # if test_files:
-        #     for test_file in test_files:
-        #         self.test_set += self._load_dataset(test_file)
-        #     self.logger.info('Test set size: {} questions.'.format(
-        #         len(self.test_set)))
 
     def path_reader(self, data_path, train=False):
         """
@@ -79,6 +89,7 @@ class BRCDataset(object):
         with io.open(data_path, 'r', encoding='utf-8') as fin:
 
             for lidx, line in enumerate(fin):
+
                 sample = json.loads(line.strip())
                 if train:
                     if len(sample['answer_spans']) == 0:
@@ -121,60 +132,66 @@ class BRCDataset(object):
                         sample['passages'].append({
                             'passage_tokens': fake_passage_tokens
                         })
+
+                # self.convert_to_ids(sample)
                 yield sample
 
-    def _load_dataset(self, data_path, train=False):
+    def path_reader2(self, reader, batch_indices, train=False):
         """
         Loads the dataset
         Args:
             data_path: the data file to load
+        Yields: a sample
         """
-        with io.open(data_path, 'r', encoding='utf-8') as fin:
-            data_set = []
-            for lidx, line in enumerate(fin):
-                sample = json.loads(line.strip())
+        data_set = []
+        for idx in batch_indices:
+            line = reader.getvalue(str(idx))
+            if not line:
+                continue
+
+            sample = json.loads(bytes.decode(line.strip()))
+            if train:
+                if len(sample['answer_spans']) == 0:
+                    continue
+                if sample['answer_spans'][0][1] >= self.max_p_len:
+                    continue
+
+            if 'answer_docs' in sample:
+                sample['answer_passages'] = sample['answer_docs']
+
+            sample['question_tokens'] = sample['segmented_question']
+
+            sample['passages'] = []
+            for d_idx, doc in enumerate(sample['documents']):
                 if train:
-                    if len(sample['answer_spans']) == 0:
-                        continue
-                    if sample['answer_spans'][0][1] >= self.max_p_len:
-                        continue
-
-                if 'answer_docs' in sample:
-                    sample['answer_passages'] = sample['answer_docs']
-
-                sample['question_tokens'] = sample['segmented_question']
-
-                sample['passages'] = []
-                for d_idx, doc in enumerate(sample['documents']):
-                    if train:
-                        most_related_para = doc['most_related_para']
-                        sample['passages'].append({
-                            'passage_tokens':
-                                doc['segmented_paragraphs'][most_related_para],
-                            'is_selected': doc['is_selected']
-                        })
-                    else:
-                        para_infos = []
-                        for para_tokens in doc['segmented_paragraphs']:
-                            question_tokens = sample['segmented_question']
-                            common_with_question = Counter(
-                                para_tokens) & Counter(question_tokens)
-                            correct_preds = sum(common_with_question.values())
-                            if correct_preds == 0:
-                                recall_wrt_question = 0
-                            else:
-                                recall_wrt_question = float(
-                                    correct_preds) / len(question_tokens)
-                            para_infos.append((para_tokens, recall_wrt_question,
-                                               len(para_tokens)))
-                        para_infos.sort(key=lambda x: (-x[1], x[2]))
-                        fake_passage_tokens = []
-                        for para_info in para_infos[:1]:
-                            fake_passage_tokens += para_info[0]
-                        sample['passages'].append({
-                            'passage_tokens': fake_passage_tokens
-                        })
-                data_set.append(sample)
+                    most_related_para = doc['most_related_para']
+                    sample['passages'].append({
+                        'passage_tokens':
+                            doc['segmented_paragraphs'][most_related_para],
+                        'is_selected': doc['is_selected']
+                    })
+                else:
+                    para_infos = []
+                    for para_tokens in doc['segmented_paragraphs']:
+                        question_tokens = sample['segmented_question']
+                        common_with_question = Counter(
+                            para_tokens) & Counter(question_tokens)
+                        correct_preds = sum(common_with_question.values())
+                        if correct_preds == 0:
+                            recall_wrt_question = 0
+                        else:
+                            recall_wrt_question = float(
+                                correct_preds) / len(question_tokens)
+                        para_infos.append((para_tokens, recall_wrt_question,
+                                           len(para_tokens)))
+                    para_infos.sort(key=lambda x: (-x[1], x[2]))
+                    fake_passage_tokens = []
+                    for para_info in para_infos[:1]:
+                        fake_passage_tokens += para_info[0]
+                    sample['passages'].append({
+                        'passage_tokens': fake_passage_tokens
+                    })
+            data_set.append(sample)
         return data_set
 
     # def _one_mini_batch(self, data, indices, pad_id):
@@ -279,14 +296,6 @@ class BRCDataset(object):
                         for token in passage['passage_tokens']:
                             yield token
 
-        # if data_set is not None:
-        #     for sample in data_set:
-        #         for token in sample['question_tokens']:
-        #             yield token
-        #         for passage in sample['passages']:
-        #             for token in passage['passage_tokens']:
-        #                 yield token
-
     def set_vocab(self, vocab):
         if not isinstance(vocab, Vocab):
             raise ValueError('is not instance of Vocab')
@@ -331,16 +340,35 @@ class BRCDataset(object):
                 set_name))
 
         is_train = True if set_name == 'train' else False
-        for data_path in path_set:
-            batch_list = []
-            for sample in self.path_reader(data_path, is_train):
-                batch_list.append(sample)
-                size = len(batch_list)
-                if size == batch_size:
-                    batch_data = self._one_mini_batch(batch_list, shuffle=True)
-                    yield batch_data
-                    batch_list = []
 
-            if len(batch_list) > 0:
-                batch_data = self._one_mini_batch(batch_list, shuffle=True)
-                yield batch_data
+        # 1, use mmap
+        for data_path in path_set:
+            print('load data from {}'.format(data_path))
+            reader = MmapFile(data_path)
+
+            data_size = reader.getdictlen()
+            indices = np.arange(data_size)
+
+            if shuffle:
+                np.random.shuffle(indices)
+
+            for batch_start in np.arange(0, data_size, batch_size):
+                batch_indices = indices[batch_start:batch_start + batch_size]
+                data = self.path_reader2(reader, batch_indices, train=is_train)
+                yield self._one_mini_batch(data, shuffle=False)
+
+        # 2、use file
+        # for data_path in path_set:
+        #     print('load data from {}'.format(data_path))
+        # batch_list = []
+        # for sample in self.path_reader(data_path, train=is_train):
+        #     batch_list.append(sample)
+        #     size = len(batch_list)
+        #     if size == batch_size:
+        #         batch_data = self._one_mini_batch(batch_list, shuffle=True)
+        #         yield batch_data
+        #         batch_list = []
+        #
+        # if len(batch_list) > 0:
+        #     batch_data = self._one_mini_batch(batch_list, shuffle=True)
+        #     yield batch_data

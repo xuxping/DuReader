@@ -83,7 +83,8 @@ def embedding(input_ids, shape, args):
         size=shape,
         dtype='float32',
         is_sparse=True,
-        param_attr=fluid.ParamAttr(name='embedding_para', trainable=args.train_embed))
+        param_attr=fluid.ParamAttr(name='embedding_para'))
+    input_embedding.stop_gradient = args.train_embed
     return input_embedding
 
 

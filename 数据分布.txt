@@ -1,8 +1,0 @@
-
-
-136208 search.train.json
-135366 zhidao.train.json
-60000 search.test.json
-60000 zhidao.test.json
-5000 search.dev.json
-5000 zhidao.dev.json
