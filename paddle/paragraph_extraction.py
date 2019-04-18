@@ -195,5 +195,5 @@ if __name__ == "__main__":
             continue
         compute_paragraph_score(sample)
         paragraph_selection(sample, mode)
-        print(json.dumps(sample, encoding='utf8', ensure_ascii=False))
+        print(json.dumps(sample, ensure_ascii=False))
 
