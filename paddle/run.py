@@ -21,6 +21,7 @@ import multiprocessing
 import os
 import random
 import sys
+from datetime import datetime
 
 import numpy as np
 import paddle.fluid as fluid
@@ -278,7 +279,7 @@ def validation(inference_program, avg_cost, s_probs, e_probs, match, feed_order,
                     'question_id': sample['question_id'],
                     'question_type': sample['question_type'],
                     'answers': [best_answer],
-                    'entity_answers': [[]],
+                    # 'entity_answers': [[]],
                     'yesno_answers': []
                 }
                 pred_answers.append(pred)
@@ -287,14 +288,14 @@ def validation(inference_program, avg_cost, s_probs, e_probs, match, feed_order,
                         'question_id': sample['question_id'],
                         'question_type': sample['question_type'],
                         'answers': sample['answers'],
-                        'entity_answers': [[]],
-                        'yesno_answers': []
+                        # 'entity_answers': [[]],
+                        'yesno_answers': []  # use classify to check
                     }
                     ref_answers.append(ref)
             batch_offset = batch_offset + batch_size
 
-    # save result in evaluate
-    if args.evaluate:
+    # save result in predict
+    if args.save_result:
         result_dir = args.result_dir
         result_prefix = args.result_name
         if result_dir is not None and result_prefix is not None:
@@ -354,6 +355,8 @@ def train(logger, args):
     else:
         place = fluid.CUDAPlace(0)
         dev_count = fluid.core.get_cuda_device_count()
+
+    logger.info('run place {}, dev count {}'.format(place, dev_count))
 
     # build model
     main_program = fluid.Program()
@@ -425,22 +428,29 @@ def train(logger, args):
                     train_reader = lambda: brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=False)
                 else:
                     train_reader = lambda: brc_data.gen_mini_batches('train', args.batch_size, pad_id, shuffle=True)
+
                 train_reader = read_multiple(train_reader, dev_count)
+
                 log_every_n_batch, n_batch_loss = args.log_interval, 0
                 total_num, total_loss = 0, 0
+
                 for batch_id, batch_list in enumerate(train_reader(), 1):
+
                     feed_data = batch_reader(batch_list, args)
+
                     fetch_outs = parallel_executor.run(
                         feed=list(feeder.feed_parallel(feed_data, dev_count)),
                         fetch_list=[obj_func.name],
                         return_numpy=False)
+
                     cost_train = np.array(fetch_outs[0]).mean()
                     total_num += args.batch_size * dev_count
                     n_batch_loss += cost_train
                     total_loss += cost_train * args.batch_size * dev_count
 
-                    if args.enable_ce and batch_id >= 100:
-                        break
+                    # if args.enable_ce and batch_id >= 100:
+                    #     break
+
                     if log_every_n_batch > 0 and batch_id % log_every_n_batch == 0:
                         print_para(main_program, parallel_executor, logger,
                                    args)
@@ -558,6 +568,7 @@ def predict(logger, args):
     brc_data = BRCDataset(
         args.max_p_num, args.max_p_len, args.max_q_len, dev_files=args.testset)
     logger.info('Converting text into ids...')
+    # brc_data.convert_to_ids(vocab)
     brc_data.set_vocab(vocab)
     logger.info('Initialize the model...')
 
@@ -654,7 +665,9 @@ def create_logger(args):
         else:
             mode = 'evaluate'
 
-        log_file = '{}/log_{}_{}.txt'.format(args.log_path, mode, int(time.time()))
+        log_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')
+        log_file = '{}/log_{}_{}.txt'.format(args.log_path, mode, log_time)
+        # log_file = '{}/log_{}.txt'.format(args.log_path, mode)
         file_handler = logging.FileHandler(log_file)
         file_handler.setLevel(logging.INFO)
         file_handler.setFormatter(formatter)
